@@ -1,0 +1,445 @@
+## 1. Root Cause Analysis
+
+The crash is ultimately caused by a **`NullPointerException` during a division operation** inside `MathEngine.recursive()`.
+
+The program attempts to divide by a `null` value because a lookup in a map returns `null`, and Java attempts to **auto-unbox the `Integer` to `int`**, which triggers the exception.
+
+### Root cause chain
+
+```
+NullPointerException
+ → wrapped in RuntimeException("Score computation failed")
+ → wrapped in RuntimeException("Worker failure")
+ → wrapped in CompletionException
+```
+
+The real issue originates in the **MathEngine recursion base case**.
+
+---
+
+# 2. Stacktrace Interpretation
+
+### Top of stack
+
+```
+Exception in thread "main" java.util.concurrent.CompletionException
+```
+
+This happens because:
+
+```
+CompletableFuture.allOf(...).join()
+```
+
+rethrows any exception from asynchronous tasks as a **CompletionException**.
+
+---
+
+### Next layer
+
+```
+Caused by: java.lang.RuntimeException: Worker failure
+```
+
+Inside the async task:
+
+```java
+catch (Exception e) {
+    throw new RuntimeException("Worker failure", e);
+}
+```
+
+So any exception from the worker thread is **wrapped here**.
+
+---
+
+### Next layer
+
+```
+Caused by: java.lang.RuntimeException: Score computation failed
+```
+
+Inside `MathEngine.heavyScore()`:
+
+```java
+RuntimeException wrapper = new RuntimeException("Score computation failed");
+wrapper.addSuppressed(e);
+throw wrapper;
+```
+
+The original exception is **added as suppressed**, not as the cause.
+
+---
+
+### Actual failure
+
+```
+Suppressed: java.lang.NullPointerException:
+Cannot invoke "java.lang.Integer.intValue()" because "divisor" is null
+```
+
+This reveals the **true bug**.
+
+---
+
+# 3. Faulty Code Line
+
+The failure occurs at:
+
+```java
+return a / divisor;
+```
+
+inside:
+
+```java
+private static int recursive(int a, int b, int depth)
+```
+
+Specifically:
+
+```java
+Integer divisor = lookup.get(b);
+return a / divisor;
+```
+
+---
+
+# 4. Explanation of the Bug
+
+Inside the recursion base case:
+
+```java
+Map<Integer,Integer> lookup = new HashMap<>();
+lookup.put(100,2);
+
+Integer divisor = lookup.get(b);
+```
+
+The map only contains:
+
+```
+100 -> 2
+```
+
+But `b` is:
+
+```
+modifier = GLOBAL_COUNTER.incrementAndGet();
+```
+
+Since 50 tasks run:
+
+```
+modifier = 1..50
+```
+
+Only when:
+
+```
+modifier == 100
+```
+
+would the lookup succeed.
+
+Therefore:
+
+```
+lookup.get(b) → null
+```
+
+Then Java performs **auto-unboxing**:
+
+```
+Integer divisor → int
+```
+
+Which internally calls:
+
+```
+divisor.intValue()
+```
+
+Because `divisor` is `null`, this throws:
+
+```
+NullPointerException
+```
+
+---
+
+# 5. Why CompletionException and RuntimeException Wrappers Appear
+
+### 1️⃣ CompletableFuture wrapper
+
+When using:
+
+```
+CompletableFuture.runAsync(...)
+```
+
+exceptions thrown in async tasks are **captured by the future**.
+
+Calling:
+
+```
+join()
+```
+
+rethrows them as:
+
+```
+CompletionException
+```
+
+This is standard CompletableFuture behavior.
+
+---
+
+### 2️⃣ Worker failure wrapper
+
+The worker explicitly wraps exceptions:
+
+```java
+catch (Exception e) {
+    throw new RuntimeException("Worker failure", e);
+}
+```
+
+---
+
+### 3️⃣ Score computation wrapper
+
+Inside `heavyScore()`:
+
+```java
+RuntimeException wrapper = new RuntimeException("Score computation failed");
+wrapper.addSuppressed(e);
+throw wrapper;
+```
+
+Instead of setting the **cause**, it **suppresses the exception**, which makes debugging harder.
+
+---
+
+# 6. Role of the Suppressed Exception
+
+This line:
+
+```
+wrapper.addSuppressed(e);
+```
+
+adds the original exception to the wrapper as **suppressed**.
+
+Suppressed exceptions are normally used for:
+
+* try-with-resources failures
+* secondary exceptions
+
+Here it is **misused**.
+
+Because of this:
+
+```
+RuntimeException("Score computation failed")
+```
+
+does **not show the original cause**, only as:
+
+```
+Suppressed: NullPointerException
+```
+
+A better approach would be:
+
+```
+throw new RuntimeException("Score computation failed", e);
+```
+
+---
+
+# 7. Suggested Fixes
+
+## Fix 1 — Validate divisor
+
+```java
+Integer divisor = lookup.get(b);
+
+if (divisor == null) {
+    throw new IllegalArgumentException("No divisor for modifier: " + b);
+}
+
+return a / divisor;
+```
+
+---
+
+## Fix 2 — Provide a default divisor
+
+```java
+Integer divisor = lookup.getOrDefault(b, 1);
+return a / divisor;
+```
+
+---
+
+## Fix 3 — Fix exception wrapping (important)
+
+Replace:
+
+```java
+wrapper.addSuppressed(e);
+```
+
+with:
+
+```java
+throw new RuntimeException("Score computation failed", e);
+```
+
+This preserves the **real cause chain**.
+
+---
+
+# 8. Additional Concurrency & Design Issues
+
+## 1️⃣ Non-thread-safe cache
+
+```
+private static final Map<Integer, User> CACHE = new HashMap<>();
+```
+
+Used by multiple threads.
+
+This can cause:
+
+* race conditions
+* corrupted HashMap
+* lost updates
+
+Fix:
+
+```java
+private static final Map<Integer, User> CACHE = new ConcurrentHashMap<>();
+```
+
+---
+
+## 2️⃣ Cache stampede problem
+
+```
+User user = CACHE.get(id);
+
+if (user == null) {
+    user = Database.loadUser(id);
+    CACHE.put(id, user);
+}
+```
+
+Multiple threads may load the same user simultaneously.
+
+Better:
+
+```java
+CACHE.computeIfAbsent(id, Database::loadUser);
+```
+
+---
+
+## 3️⃣ Excessive object creation
+
+Inside each task:
+
+```
+new Random()
+```
+
+Better:
+
+```
+ThreadLocalRandom.current()
+```
+
+---
+
+## 4️⃣ Serializer streams not closed
+
+Streams should be closed or used with try-with-resources.
+
+Example:
+
+```java
+try (ObjectOutputStream out = new ObjectOutputStream(bos)) {
+    out.writeObject(user);
+}
+```
+
+---
+
+## 5️⃣ Exception wrapping anti-pattern
+
+Using:
+
+```
+addSuppressed()
+```
+
+instead of `cause` breaks stacktrace clarity.
+
+---
+
+# 9. Final Summary
+
+### Root Cause
+
+`NullPointerException` caused by dividing by a **null divisor** retrieved from a map.
+
+### Faulty Code
+
+```
+Integer divisor = lookup.get(b);
+return a / divisor;
+```
+
+### Why It Happens
+
+`lookup` only contains:
+
+```
+100 -> 2
+```
+
+But `modifier` ranges:
+
+```
+1..50
+```
+
+So `lookup.get(b)` returns `null`.
+
+Auto-unboxing causes the `NullPointerException`.
+
+---
+
+### Stacktrace Chain
+
+```
+NullPointerException
+ → RuntimeException("Score computation failed")
+ → RuntimeException("Worker failure")
+ → CompletionException
+```
+
+---
+
+### Fixes
+
+1. Validate `divisor`
+2. Provide default value
+3. Fix exception wrapping
+4. Replace `HashMap` cache with `ConcurrentHashMap`
+
+---
+
+If you'd like, I can also show **how a senior Java engineer would debug this stacktrace in ~30 seconds**, which is a very useful interview skill.

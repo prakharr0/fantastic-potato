@@ -1,69 +1,128 @@
-## Stack Trace Analysis
+## Root Cause Analysis
 
-This is a deeply nested exception chain. Here's the breakdown from root cause to surface:
+### 1. Root Cause
 
----
+The crash is caused by a **`NullPointerException` in `MathEngine.recursive()`** at line 123. The `lookup` map only contains the key `100`, but `b` (the `modifier`) is almost never `100`, so `lookup.get(b)` returns `null`. The code then attempts to unbox that `null` `Integer` as a primitive `int` divisor, which throws an NPE.
 
-### 🔴 Root Cause (Fix This First)
-
-**`NullPointerException` at `ComplexMath.riskyOperation` (line 138)**
-
-```
-Cannot invoke "java.lang.Integer.intValue()" because "divisor" is null
-```
-
-A variable named `divisor` is `null` when it's being unboxed/used as a primitive. The call path that led here:
-
-```
-heavyCalculation (line 119)
-  → recursiveCompute (line 129) ×3 recursions
-    → recursiveCompute (line 127)
-      → riskyOperation (line 138)  💥 null divisor
-```
-
-**Fix:** Add a null check (and likely a zero-division guard) before using `divisor`:
+### 2. Faulty Line
 
 ```java
-// Before
-int result = value / divisor;  // divisor is null → NPE
-
-// After
-if (divisor == null) {
-    throw new IllegalArgumentException("divisor must not be null");
-    // or handle with a default: divisor = 1;
-}
-int result = value / divisor;
+// Line 123 — ExtremeDebugBenchmark.java
+return a / divisor;  // divisor is null when b != 100
 ```
 
-Also check wherever `divisor` is set — it's likely coming from a stream or collection that can contain nulls.
+The `lookup` map is hardcoded with only one entry:
+```java
+lookup.put(100, 2);
+Integer divisor = lookup.get(b);  // returns null unless b == 100
+```
+
+Since `b` is derived from `GLOBAL_COUNTER.incrementAndGet()` (values 1, 2, 3, ...), it will essentially never be `100`, so `divisor` is always `null`.
+
+### 3. Why the Failure Happens — Step by Step
+
+| Step | What happens |
+|---|---|
+| `modifier = GLOBAL_COUNTER.incrementAndGet()` | Produces sequential integers (1, 2, 3…) |
+| `MathEngine.heavyScore(base, modifier)` | Calls `recursive(base, modifier, 3)` |
+| `recursive` bottoms out at `depth == 0` | Builds a map with only `{100 → 2}` and calls `lookup.get(modifier)` |
+| `modifier` is not `100` | `get()` returns `null` |
+| `a / divisor` | Java auto-unboxes `null` Integer → **NPE** |
+
+### 4. Why the Stacktrace Shows Wrapped Exceptions
+
+The exception chain has **three layers** because the code manually wraps at each level:
+
+```
+CompletionException                    ← added by CompletableFuture.join()
+  └─ RuntimeException: "Worker failure"  ← thrown in lambda catch block (line 33)
+       └─ RuntimeException: "Score computation failed"  ← thrown in MathEngine.heavyScore()
+            └─ [SUPPRESSED] NullPointerException        ← the actual root cause
+```
+
+- **`CompletionException`**: `CompletableFuture.allOf(...).join()` always wraps async task failures in a `CompletionException`.
+- **`RuntimeException("Worker failure")`**: The lambda's `catch (Exception e)` block re-throws every exception wrapped, masking the original.
+- **`RuntimeException("Score computation failed")`**: `heavyScore()` catches the NPE and wraps it — but crucially uses `addSuppressed()` instead of passing it as the cause, which is why it appears in a `Suppressed:` block rather than a `Caused by:` chain.
+
+### 5. The Role of the Suppressed Exception
+
+```java
+RuntimeException wrapper = new RuntimeException("Score computation failed");
+wrapper.addSuppressed(e);  // ← e is the NPE
+throw wrapper;
+```
+
+`addSuppressed()` is designed for try-with-resources cleanup exceptions. Here it's misused: the NPE is the **actual cause** of the failure, but because it's suppressed rather than chained via the constructor `new RuntimeException("...", e)`, it's buried in the stacktrace under `Suppressed:` and easy to overlook. This is what makes this crash deceptively hard to diagnose.
 
 ---
 
-### 📋 Full Exception Chain (Outer → Inner)
+## Suggested Fixes
 
-| Layer | Exception | Location |
-|---|---|---|
-| 1 (surface) | `PipelineException` | `Orchestrator.start` :37 |
-| 2 | `ExecutionException` wrapping RuntimeException | `FutureTask.get` :193 |
-| 3 | `RuntimeException`: *Async processing failed* | `Orchestrator.lambda` :30 |
-| 4 | `ReflectionLayerException` | `Orchestrator.invokeProcessing` :54 |
-| 5 | `InvocationTargetException` | `Method.invoke` :565 |
-| 6 | `RuntimeException`: *Pipeline transformation error* | `DataPipeline.runPipeline` :70 |
-| 7 ⚠️ | `ComputationException` (**suppressed**) | `StageTwo.compute` :94 |
-| 8 | `RuntimeException`: *Math subsystem failure* | `ComplexMath.heavyCalculation` :121 |
-| 9 🔴 | **`NullPointerException`** | `ComplexMath.riskyOperation` :138 |
+**Fix 1 — Fix the lookup logic (correct the immediate bug)**
+
+The map lookup is the wrong tool here. Replace it with a direct null-safe check or a proper default:
+
+```java
+private static int recursive(int a, int b, int depth) {
+    if (depth == 0) {
+        // Use b directly as divisor, guarding against zero
+        if (b == 0) throw new ArithmeticException("Divisor is zero");
+        return a / b;
+    }
+    return recursive(a + b, b, depth - 1);
+}
+```
+
+Or, if the map approach is intentional, add a fallback:
+
+```java
+Integer divisor = lookup.getOrDefault(b, 1); // safe default
+```
+
+**Fix 2 — Fix the exception wrapping to use proper causal chaining**
+
+```java
+// In MathEngine.heavyScore():
+catch (Exception e) {
+    throw new RuntimeException("Score computation failed", e); // chain as cause, not suppressed
+}
+
+// In the lambda:
+catch (Exception e) {
+    throw new RuntimeException("Worker failure", e); // already done correctly here
+}
+```
+
+This ensures `getCause()` traversal and logging tools expose the full chain without burying the root cause in a suppressed block.
 
 ---
 
-### ⚠️ Notable: Suppressed Exception
+## Additional Concurrency & Design Issues
 
-The `ComputationException: StageTwo computation failed` is a **suppressed** exception (added via `Throwable.addSuppressed()`), meaning it was caught during a `finally` block or try-with-resources while another exception was already propagating. This is worth examining — two things failed simultaneously in `DataPipeline.runPipeline` around line 66–70.
+**1. `CacheLayer` has a race condition (`HashMap` + unsynchronized write)**
 
----
+```java
+private static final Map<Integer, User> CACHE = new HashMap<>();
+```
 
-### 🔧 Recommended Fixes
+Multiple threads call `getUser()` concurrently without synchronization. `HashMap` is not thread-safe — concurrent puts can corrupt its internal state. Fix: use `ConcurrentHashMap` and `computeIfAbsent()`:
 
-1. **Immediate:** Null-check `divisor` in `ComplexMath.riskyOperation` (line 138)
-2. **Trace the source:** Find where `divisor` is populated — likely a map lookup, stream element, or method return that can be `null`
-3. **Review recursion:** `recursiveCompute` calls itself 3+ levels deep — ensure the base case prevents passing null values down
-4. **Investigate suppressed exception:** Check why `StageTwo` also failed — there may be a shared bad input affecting multiple stages
+```java
+private static final Map<Integer, User> CACHE = new ConcurrentHashMap<>();
+
+public static User getUser(int id) {
+    return CACHE.computeIfAbsent(id, Database::loadUser);
+}
+```
+
+**2. `ScoreService.GLOBAL_COUNTER` grows unboundedly**
+
+The `AtomicInteger` counter increments forever across all 50 tasks, meaning `modifier` values are always 1–50 (never `100`), which guarantees the bug triggers every single run. Even if the lookup were fixed to handle a range, an ever-growing modifier is a design smell.
+
+**3. Unnecessary serialization round-trip**
+
+`Serializer.serialize()` + `deserialize()` is used just to pass a `User` object — which is already in memory — to `ScoreService`. This adds CPU and memory overhead with no benefit. If the goal is defensive copying, a simple copy constructor on `User` is far cheaper.
+
+**4. Exception wrapping obscures diagnostics**
+
+As noted above, using `addSuppressed()` for the causal exception (rather than passing it as the `cause` argument to the `RuntimeException` constructor) makes automated error monitoring tools (like Sentry or Splunk) likely to miss the root cause entirely.

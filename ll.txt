@@ -211,11 +211,3 @@ Faulty code line
 Explanation of the bug
 Suggested fixes
 Additional issues in the code
-What This Benchmark Tests
-This debugging task tests the model's ability to:
-Trace nested exceptions
-Interpret suppressed exceptions
-Understand auto-unboxing NullPointerException
-Follow recursive call stacks
-Reason about asynchronous execution (CompletableFuture)
-Detect concurrency issues
