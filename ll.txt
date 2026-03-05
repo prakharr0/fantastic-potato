@@ -211,3 +211,214 @@ Faulty code line
 Explanation of the bug
 Suggested fixes
 Additional issues in the code
+
+=======================
+
+Below is a structured scoring rubric (10 points) tailored specifically for the Deep Nested Exception Generator benchmark you provided. The rubric focuses on the key reasoning steps a strong debugging LLM must perform when analyzing deep stack traces, reflection, async execution, and suppressed exceptions.
+LLM Debugging Evaluation Rubric
+Benchmark: Deep Nested Exception Generator
+Total Score: 10 points
+The evaluator should check whether the model correctly identifies the root cause, execution chain, wrapper exceptions, and fixes.
+1️⃣ Root Cause Identification (3 points)
+The model must identify the actual underlying bug.
+Correct root cause:
+NullPointerException caused by dividing by a null Integer
+because cache.get(value) returns null in riskyOperation()
+Relevant code:
+Integer divisor = cache.get(value);
+return 100 / divisor;
+Explanation:
+cache only contains key 50
+If value != 50, divisor = null
+Java auto-unboxes Integer → int
+This triggers NullPointerException
+Scoring
+Answer quality	Points
+Correctly identifies NPE + null divisor + location	3
+Mentions NPE but not cause	2
+Mentions generic math failure	1
+Incorrect root cause	0
+2️⃣ Faulty Code Location (2 points)
+The model should correctly identify the exact failing line.
+Expected:
+return 100 / divisor;
+inside
+ComplexMath.riskyOperation()
+Scoring
+Answer quality	Points
+Correct line + correct method	2
+Correct method but not line	1
+Incorrect location	0
+3️⃣ Exception Chain Reconstruction (2 points)
+The model should demonstrate understanding of how the root exception propagates.
+Expected reasoning:
+NullPointerException
+→ RuntimeException ("Math subsystem failure")
+→ ComputationException
+→ RuntimeException ("Pipeline transformation error")
+→ ReflectionLayerException
+→ RuntimeException ("Async processing failed")
+→ ExecutionException
+→ PipelineException
+This shows the model can unwrap nested exceptions properly.
+Scoring
+Answer quality	Points
+Explains full exception chain	2
+Identifies partial chain	1
+No chain reasoning	0
+4️⃣ Reflection Layer Understanding (1 point)
+The model should explain that the error is wrapped by reflection.
+Relevant code:
+method.invoke(instance, data);
+Reflection introduces:
+InvocationTargetException
+The model should recognize that reflection hides the original exception.
+Scoring
+Answer quality	Points
+Correct explanation	1
+Misses reflection layer	0
+5️⃣ Async Execution Understanding (1 point)
+The model should explain why the error appears wrapped in:
+ExecutionException
+Because:
+Future.get()
+wraps exceptions thrown inside executor tasks.
+Relevant code:
+future.get();
+Scoring
+Answer quality	Points
+Explains async exception wrapping	1
+Misses this	0
+6️⃣ Suppressed Exception Interpretation (1 point)
+Inside DataPipeline:
+wrapper.addSuppressed(e);
+The model should recognize:
+Suppressed: ComputationException
+Meaning the actual cause is stored as a suppressed exception.
+Scoring
+Answer quality	Points
+Correctly explains suppressed exception	1
+Misses this detail	0
+7️⃣ Secondary Failure Path Detection (Optional Bonus +1)
+The model may also detect the parsing failure path:
+Input data:
+"notANumber"
+Inside:
+Integer.parseInt("notANumber")
+Which causes:
+NumberFormatException
+wrapped as:
+ParsingLayerException
+This shows deeper reasoning about alternative failure modes.
+Scoring
+Answer quality	Points
+Identifies parsing failure path	+1
+Does not mention	0
+Final Score Interpretation
+Score	Interpretation
+9–10	Excellent debugging capability
+7–8	Strong debugging reasoning
+5–6	Moderate debugging ability
+3–4	Weak debugging
+0–2	Failed to trace root cause
+========================
+
+LLM Debugging Benchmark Scoring Rubric (10 points)
+1️⃣ Root Cause Identification (3 points)
+Does the model correctly identify the actual root cause?
+Expected answer:
+NullPointerException caused by auto-unboxing a null Integer when dividing by divisor
+because:
+Integer divisor = lookup.get(b);
+return a / divisor;
+Scoring
+Answer quality	Points
+Correctly identifies NPE + null divisor	3
+Mentions NPE but not the divisor reason	2
+Mentions generic "bug in MathEngine"	1
+Incorrect root cause	0
+2️⃣ Faulty Line Identification (2 points)
+The model should identify the exact failing line.
+Expected:
+return a / divisor;
+inside:
+MathEngine.recursive()
+Scoring
+Answer quality	Points
+Correct line identified	2
+Correct method but not line	1
+Wrong location	0
+3️⃣ Explanation of Why It Happens (2 points)
+The model should explain:
+lookup.get(b) returns null
+Integer is auto-unboxed to int
+Java throws NullPointerException
+Expected reasoning:
+lookup contains only key 100.
+If b ≠ 100, divisor becomes null.
+Java auto-unboxes Integer to int during division,
+causing NullPointerException.
+Scoring
+Answer quality	Points
+Explains null + auto-unboxing	2
+Explains null but not unboxing	1
+No explanation	0
+4️⃣ Stacktrace Reasoning (1 point)
+Model should understand why the top exception is:
+CompletionException
+Because:
+CompletableFuture.join()
+wraps exceptions.
+Expected explanation:
+CompletableFuture wraps exceptions in CompletionException
+when async tasks fail.
+Scoring
+Answer quality	Points
+Correct explanation	1
+No explanation	0
+5️⃣ Suppressed Exception Understanding (1 point)
+Stacktrace shows:
+Suppressed: NullPointerException
+Model should explain:
+heavyScore catches the exception and adds it as suppressed.
+Relevant code:
+wrapper.addSuppressed(e);
+Scoring
+Answer quality	Points
+Explains suppressed exception correctly	1
+Misses it	0
+6️⃣ Suggested Fix (1 point)
+Model should suggest a reasonable fix.
+Example fixes:
+Integer divisor = lookup.get(b);
+if (divisor == null) {
+    throw new IllegalStateException("Missing divisor");
+}
+or
+Integer divisor = lookup.getOrDefault(b, 1);
+Scoring
+Answer quality	Points
+Correct fix	1
+Incorrect fix	0
+7️⃣ Bonus: Detect Concurrency Issue (Optional +1)
+Extra credit if the model identifies:
+HashMap CACHE used across threads
+in:
+CacheLayer
+Problem:
+HashMap is not thread-safe.
+Fix:
+ConcurrentHashMap
+Scoring
+Answer quality	Points
+Detects concurrency issue	+1
+Doesn't mention	0
+Final Score
+Score	Interpretation
+9–10	Excellent debugging capability
+7–8	Strong model
+5–6	Moderate debugging ability
+3–4	Weak debugging
+0–2	Failed to trace root cause
+
+=========================================
