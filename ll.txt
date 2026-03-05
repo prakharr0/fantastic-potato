@@ -1,0 +1,90 @@
+This stack trace shows a deeply wrapped exception chain caused by async execution, reflection, streams, and nested runtime exceptions. The key to debugging it is to follow the “Caused by” chain to the root cause.
+🔎 Root Cause of the Failure
+The actual failure is this line at the bottom:
+Caused by: java.lang.NullPointerException: Cannot invoke "java.lang.Integer.intValue()" because "divisor" is null
+	at rathi.prakhar.ComplexMath.riskyOperation(ExceptionGen.java:138)
+Meaning
+Your code is trying to do something like:
+Integer divisor = null;
+int result = value / divisor; // or divisor.intValue()
+Since divisor is null, Java throws a NullPointerException.
+🧵 Exception Propagation Path
+Here is how the error bubbled up through layers:
+1️⃣ Root cause
+NullPointerException
+ComplexMath.riskyOperation()
+line 138
+2️⃣ Called by recursive computation
+ComplexMath.recursiveCompute()
+Multiple recursive calls:
+recursiveCompute
+recursiveCompute
+recursiveCompute
+3️⃣ Wrapped by math subsystem
+RuntimeException: Math subsystem failure
+ComplexMath.heavyCalculation()
+4️⃣ Wrapped by pipeline stage
+ComputationException: StageTwo computation failed
+StageTwo.compute()
+This exception is suppressed, not primary.
+5️⃣ Wrapped by pipeline engine
+RuntimeException: Pipeline transformation error
+DataPipeline.runPipeline()
+6️⃣ Wrapped by reflection
+InvocationTargetException
+Method.invoke()
+Reflection always wraps thrown exceptions.
+7️⃣ Wrapped by custom reflection layer
+ReflectionLayerException
+Orchestrator.invokeProcessing()
+8️⃣ Wrapped by async executor
+RuntimeException: Async processing failed
+Orchestrator.lambda$start$0
+9️⃣ Wrapped by Future.get()
+ExecutionException
+FutureTask.get()
+🔟 Top-level pipeline exception
+PipelineException
+Orchestrator.start()
+📊 Visual Exception Tree
+PipelineException
+└── ExecutionException
+    └── RuntimeException (Async processing failed)
+        └── ReflectionLayerException
+            └── InvocationTargetException
+                └── RuntimeException (Pipeline transformation error)
+                    └── ComputationException (suppressed)
+                        └── RuntimeException (Math subsystem failure)
+                            └── NullPointerException  <-- ROOT CAUSE
+🛠 Fix
+Go to:
+ExceptionGen.java:138
+ComplexMath.riskyOperation()
+You probably have something like:
+Integer divisor = getDivisor();
+return value / divisor;
+Fix:
+Option 1 — Null check
+if (divisor == null) {
+    throw new IllegalArgumentException("Divisor cannot be null");
+}
+Option 2 — Default value
+int d = divisor == null ? 1 : divisor;
+return value / d;
+Option 3 — Fail early
+Objects.requireNonNull(divisor, "Divisor must not be null");
+⚠️ Important Debugging Tip
+When reading large Java stack traces:
+Always scroll to the LAST "Caused by"
+The bottom-most exception is almost always the real bug.
+💡 Why this stack trace is interesting
+Your trace includes many real-world Java complexities:
+ExecutorService
+Future.get() wrapping
+reflection (Method.invoke)
+suppressed exceptions
+streams (ReferencePipeline)
+recursion
+layered exception wrapping
+This is very typical of production microservices.
+✅ If you'd like, I can also show you how to redesign this exception handling so stack traces become 10× easier to debug in production systems.
