@@ -1,32 +1,5 @@
-Context
-You are debugging a Java service that runs asynchronous tasks using CompletableFuture and a thread pool.
-The service recently started crashing with the following exception.
-Your task is to analyze the stacktrace and the code to identify the root cause of the failure.
-Stacktrace
-Exception in thread "main" java.util.concurrent.CompletionException: java.lang.RuntimeException: Worker failure
-	at java.base/java.util.concurrent.CompletableFuture.encodeThrowable(CompletableFuture.java:315)
-	at java.base/java.util.concurrent.CompletableFuture.completeThrowable(CompletableFuture.java:320)
-	at java.base/java.util.concurrent.CompletableFuture$AsyncRun.run(CompletableFuture.java:1807)
-	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)
-	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
-	at java.base/java.lang.Thread.run(Thread.java:1583)
-Caused by: java.lang.RuntimeException: Worker failure
-	at rathi.prakhar.ExtremeDebugBenchmark.lambda$main$0(ExtremeDebugBenchmark.java:33)
-	at java.base/java.util.concurrent.CompletableFuture$AsyncRun.run(CompletableFuture.java:1804)
-	... 3 more
-Caused by: java.lang.RuntimeException: Score computation failed
-	at rathi.prakhar.MathEngine.heavyScore(ExtremeDebugBenchmark.java:105)
-	at rathi.prakhar.ScoreService.computeScore(ExtremeDebugBenchmark.java:89)
-	at rathi.prakhar.ExtremeDebugBenchmark.lambda$main$0(ExtremeDebugBenchmark.java:30)
-	... 4 more
-	Suppressed: java.lang.NullPointerException: Cannot invoke "java.lang.Integer.intValue()" because "divisor" is null
-		at rathi.prakhar.MathEngine.recursive(ExtremeDebugBenchmark.java:123)
-		at rathi.prakhar.MathEngine.recursive(ExtremeDebugBenchmark.java:126)
-		at rathi.prakhar.MathEngine.recursive(ExtremeDebugBenchmark.java:126)
-		at rathi.prakhar.MathEngine.recursive(ExtremeDebugBenchmark.java:126)
-		at rathi.prakhar.MathEngine.heavyScore(ExtremeDebugBenchmark.java:99)
-		... 6 more
-Code
+package rathi.prakhar;
+
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -194,28 +167,3 @@ class User implements Serializable {
         return score;
     }
 }
-Tasks
-Analyze the stacktrace and the code and answer the following:
-What is the root cause of the crash?
-Which exact line of code causes the failure?
-Why does the failure happen?
-Why does the stacktrace show CompletionException and RuntimeException wrappers?
-Explain the role of the suppressed exception in the stacktrace.
-Suggest two fixes to prevent the crash.
-Identify any concurrency or design issues in the code that could cause problems under load.
-Expected Output Format
-The answer should include:
-Root cause analysis
-Stacktrace interpretation
-Faulty code line
-Explanation of the bug
-Suggested fixes
-Additional issues in the code
-What This Benchmark Tests
-This debugging task tests the model's ability to:
-Trace nested exceptions
-Interpret suppressed exceptions
-Understand auto-unboxing NullPointerException
-Follow recursive call stacks
-Reason about asynchronous execution (CompletableFuture)
-Detect concurrency issues
