@@ -1,0 +1,69 @@
+## Stack Trace Analysis
+
+This is a deeply nested exception chain. Here's the breakdown from root cause to surface:
+
+---
+
+### 🔴 Root Cause (Fix This First)
+
+**`NullPointerException` at `ComplexMath.riskyOperation` (line 138)**
+
+```
+Cannot invoke "java.lang.Integer.intValue()" because "divisor" is null
+```
+
+A variable named `divisor` is `null` when it's being unboxed/used as a primitive. The call path that led here:
+
+```
+heavyCalculation (line 119)
+  → recursiveCompute (line 129) ×3 recursions
+    → recursiveCompute (line 127)
+      → riskyOperation (line 138)  💥 null divisor
+```
+
+**Fix:** Add a null check (and likely a zero-division guard) before using `divisor`:
+
+```java
+// Before
+int result = value / divisor;  // divisor is null → NPE
+
+// After
+if (divisor == null) {
+    throw new IllegalArgumentException("divisor must not be null");
+    // or handle with a default: divisor = 1;
+}
+int result = value / divisor;
+```
+
+Also check wherever `divisor` is set — it's likely coming from a stream or collection that can contain nulls.
+
+---
+
+### 📋 Full Exception Chain (Outer → Inner)
+
+| Layer | Exception | Location |
+|---|---|---|
+| 1 (surface) | `PipelineException` | `Orchestrator.start` :37 |
+| 2 | `ExecutionException` wrapping RuntimeException | `FutureTask.get` :193 |
+| 3 | `RuntimeException`: *Async processing failed* | `Orchestrator.lambda` :30 |
+| 4 | `ReflectionLayerException` | `Orchestrator.invokeProcessing` :54 |
+| 5 | `InvocationTargetException` | `Method.invoke` :565 |
+| 6 | `RuntimeException`: *Pipeline transformation error* | `DataPipeline.runPipeline` :70 |
+| 7 ⚠️ | `ComputationException` (**suppressed**) | `StageTwo.compute` :94 |
+| 8 | `RuntimeException`: *Math subsystem failure* | `ComplexMath.heavyCalculation` :121 |
+| 9 🔴 | **`NullPointerException`** | `ComplexMath.riskyOperation` :138 |
+
+---
+
+### ⚠️ Notable: Suppressed Exception
+
+The `ComputationException: StageTwo computation failed` is a **suppressed** exception (added via `Throwable.addSuppressed()`), meaning it was caught during a `finally` block or try-with-resources while another exception was already propagating. This is worth examining — two things failed simultaneously in `DataPipeline.runPipeline` around line 66–70.
+
+---
+
+### 🔧 Recommended Fixes
+
+1. **Immediate:** Null-check `divisor` in `ComplexMath.riskyOperation` (line 138)
+2. **Trace the source:** Find where `divisor` is populated — likely a map lookup, stream element, or method return that can be `null`
+3. **Review recursion:** `recursiveCompute` calls itself 3+ levels deep — ensure the base case prevents passing null values down
+4. **Investigate suppressed exception:** Check why `StageTwo` also failed — there may be a shared bad input affecting multiple stages
